@@ -9,7 +9,7 @@ public class EvaluationPromptFactory {
             priority must be one of: P0, P1, P2, P3.
             Return JSON only, without Markdown.
             ""","Ticket title:\n"+c.title()+"\n\nTicket description:\n"+c.description());
-        case "v1" -> {Ticket t=new Ticket(0L,c.title(),c.description(),"evaluation",TicketStatus.NEW,null,TicketPriority.P2,0,"evaluation",Instant.EPOCH,Instant.EPOCH);yield new EvaluationPrompt(production.systemPrompt(),production.userPrompt(t));}
-        default -> throw new ValidationException("Unsupported evaluation prompt: "+version+". Use baseline-v0 or v1.");};}
+        case "v1", "v2", "v3" -> {Ticket t=new Ticket(0L,c.title(),c.description(),"evaluation",TicketStatus.NEW,null,TicketPriority.P2,0,"evaluation",Instant.EPOCH,Instant.EPOCH);yield switch(version){case "v1"->new EvaluationPrompt(production.systemPromptV1(),production.userPromptV1(t));case "v2"->new EvaluationPrompt(production.systemPromptV2(),production.userPromptV1(t));default->new EvaluationPrompt(production.systemPrompt(),production.userPrompt(t));};}
+        default -> throw new ValidationException("Unsupported evaluation prompt: "+version+". Use baseline-v0, v1, v2 or v3.");};}
     public record EvaluationPrompt(String systemPrompt,String userPrompt){}
 }

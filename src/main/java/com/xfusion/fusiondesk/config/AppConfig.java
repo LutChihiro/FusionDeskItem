@@ -41,5 +41,9 @@ public final class AppConfig {
         return blank(fileValue) ? null : fileValue.strip();
     }
 
+    public int intValue(String propertyName,int defaultValue){String value=properties.getProperty(propertyName);if(blank(value))return defaultValue;try{return Integer.parseInt(value.strip());}catch(NumberFormatException e){throw new BusinessException("Invalid integer configuration: "+propertyName,e);}}
+    public double doubleValue(String propertyName,double defaultValue){String value=properties.getProperty(propertyName);if(blank(value))return defaultValue;try{return Double.parseDouble(value.strip());}catch(NumberFormatException e){throw new BusinessException("Invalid decimal configuration: "+propertyName,e);}}
+    public boolean booleanValue(String propertyName,boolean defaultValue){String value=properties.getProperty(propertyName);if(blank(value))return defaultValue;if("true".equalsIgnoreCase(value.strip()))return true;if("false".equalsIgnoreCase(value.strip()))return false;throw new BusinessException("Invalid boolean configuration: "+propertyName);}
+
     private static boolean blank(String value) { return value == null || value.isBlank(); }
 }

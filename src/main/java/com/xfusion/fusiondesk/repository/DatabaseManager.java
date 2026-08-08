@@ -73,6 +73,7 @@ public class DatabaseManager {
     public void initializeSchema() {
         try (Connection connection = openConnection(); Statement statement = connection.createStatement()) {
             for (String sql : dialect.schemaStatements()) statement.execute(sql);
+            new PromptVersionRepository(this).ensureDefault(connection);
         } catch (SQLException e) {
             throw new DatabaseException("Failed to initialize database at " + safeLocation(), e);
         }
