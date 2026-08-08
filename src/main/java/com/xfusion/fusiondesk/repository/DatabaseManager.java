@@ -1,6 +1,7 @@
 package com.xfusion.fusiondesk.repository;
 
 import com.xfusion.fusiondesk.exception.DatabaseException;
+import com.xfusion.fusiondesk.config.AppConfig;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -37,9 +38,12 @@ public class DatabaseManager {
     }
 
     public static DatabaseManager defaultDatabase() {
-        DatabaseType configured = DatabaseType.parse(System.getenv("FUSIONDESK_DB_TYPE"));
+        AppConfig config = AppConfig.current();
+        DatabaseType configured = DatabaseType.parse(config.value("FUSIONDESK_DB_TYPE", "db.type"));
         if (configured == DatabaseType.MYSQL) {
-            return mysql(System.getenv("MYSQL_URL"), System.getenv("MYSQL_USER"), System.getenv("MYSQL_PASSWORD"));
+            return mysql(config.value("MYSQL_URL", "mysql.url"),
+                    config.value("MYSQL_USER", "mysql.user"),
+                    config.value("MYSQL_PASSWORD", "mysql.password"));
         }
         return new DatabaseManager(Path.of("data", "fusiondesk.db"));
     }
