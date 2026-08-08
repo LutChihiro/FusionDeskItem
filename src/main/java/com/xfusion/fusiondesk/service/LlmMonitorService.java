@@ -33,7 +33,7 @@ public class LlmMonitorService {
         }
 
         Instant now = Instant.now();
-        if (!states.claimPrimaryProbe(now, policy)) {
+        if (!states.claimPrimaryProbe(now, policy, LlmProviderStateRepository.SOURCE_MONITOR)) {
             return new ProbeResult(false, false, states.get(),
                     "尚未到达下一次探测时间，或探测已被其他进程占用。");
         }
@@ -45,14 +45,16 @@ public class LlmMonitorService {
                 throw new IllegalStateException("主模型返回空响应。");
             }
             validator.validate(response.content());
-            states.recordSuccess(response.model(), Instant.now(), policy);
+            states.recordSuccess(response.model(), Instant.now(), policy,
+                    LlmProviderStateRepository.SOURCE_MONITOR);
             LlmProviderState after = states.get();
             String message = after.state() == LlmCircuitState.CLOSED
                     ? "主模型探测成功，已切回主模型。"
                     : "主模型探测成功，等待更多成功次数。";
             return new ProbeResult(true, after.state() == LlmCircuitState.CLOSED, after, message);
         } catch (RuntimeException error) {
-            states.recordFailure(primaryModel, safeMessage(error), Instant.now(), policy);
+            states.recordFailure(primaryModel, safeMessage(error), Instant.now(), policy,
+                    LlmProviderStateRepository.SOURCE_MONITOR);
             return new ProbeResult(true, false, states.get(),
                     "主模型探测失败：" + safeMessage(error));
         }
