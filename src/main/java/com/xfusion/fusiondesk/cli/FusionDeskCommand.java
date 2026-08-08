@@ -16,6 +16,7 @@ public class FusionDeskCommand implements Runnable {
     public FusionDeskCommand(DatabaseManager database){this.database=database;this.service=new TicketService(database);this.suggestions=new AiSuggestionRepository(database);}
     public DatabaseManager database(){return database;} public TicketService service(){return service;} public AiSuggestionRepository suggestions(){return suggestions;}
     public AiTriageService aiService(LlmProvider provider){return new AiTriageService(database,provider);}
+    public AiTriageService aiService(LlmProvider primary,LlmProvider fallback){return new AiTriageService(database,primary,fallback);}
     public ReviewService reviewService(){return new ReviewService(database);}
     @Override public void run(){System.out.println("Use --help to see available commands.");}
 }

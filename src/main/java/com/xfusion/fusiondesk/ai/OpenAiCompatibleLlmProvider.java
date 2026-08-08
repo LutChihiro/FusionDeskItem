@@ -10,18 +10,22 @@ import java.net.http.*;
 import java.time.Duration;
 
 public class OpenAiCompatibleLlmProvider implements LlmProvider {
-    private final HttpClient client; private final URI endpoint; private final String apiKey; private final String model; private final ObjectMapper json;
+    private final HttpClient client; private final URI endpoint; private final String apiKey; private final String model; private final Duration requestTimeout; private final ObjectMapper json;
     public OpenAiCompatibleLlmProvider(HttpClient client,String baseUrl,String apiKey,String model){
+        this(client,baseUrl,apiKey,model,Duration.ofSeconds(20));
+    }
+    public OpenAiCompatibleLlmProvider(HttpClient client,String baseUrl,String apiKey,String model,Duration requestTimeout){
         if(blank(apiKey)||blank(baseUrl)||blank(model))throw missingConfiguration();
-        this.client=client;this.apiKey=apiKey;this.model=model;this.json=new ObjectMapper();
+        if(requestTimeout==null||requestTimeout.isZero()||requestTimeout.isNegative())throw new AiAnalysisException("LLM request timeout must be positive.");
+        this.client=client;this.apiKey=apiKey;this.model=model;this.requestTimeout=requestTimeout;this.json=new ObjectMapper();
         String normalized=baseUrl.strip().replaceAll("/+$","");
         try{this.endpoint=URI.create(normalized+"/chat/completions");if(!"https".equalsIgnoreCase(endpoint.getScheme())&&!"http".equalsIgnoreCase(endpoint.getScheme()))throw new IllegalArgumentException();}
         catch(IllegalArgumentException e){throw new AiAnalysisException("LLM_BASE_URL is invalid.");}
     }
-    public static OpenAiCompatibleLlmProvider fromEnvironment(){AppConfig config=AppConfig.current();return new OpenAiCompatibleLlmProvider(HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build(),config.value("LLM_BASE_URL","llm.base-url"),config.value("LLM_API_KEY","llm.api-key"),config.value("LLM_MODEL","llm.model"));}
+    public static OpenAiCompatibleLlmProvider fromEnvironment(){AppConfig c=AppConfig.current();int connect=c.intValue("llm.primary.connect-timeout-seconds",5),request=c.intValue("llm.primary.request-timeout-seconds",20);if(connect<=0||request<=0)throw new AiAnalysisException("LLM timeout configuration must be positive.");return new OpenAiCompatibleLlmProvider(HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(connect)).build(),c.value("LLM_BASE_URL","llm.base-url"),c.value("LLM_API_KEY","llm.api-key"),c.value("LLM_MODEL","llm.model"),Duration.ofSeconds(request));}
     @Override public LlmResponse complete(String systemPrompt,String userPrompt){
         ObjectNode body=json.createObjectNode();body.put("model",model);body.put("temperature",0);ArrayNode messages=body.putArray("messages");messages.addObject().put("role","system").put("content",systemPrompt);messages.addObject().put("role","user").put("content",userPrompt);
-        final HttpRequest request;try{request=HttpRequest.newBuilder(endpoint).timeout(Duration.ofSeconds(20)).header("Authorization","Bearer "+apiKey).header("Content-Type","application/json").POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body))).build();}
+        final HttpRequest request;try{request=HttpRequest.newBuilder(endpoint).timeout(requestTimeout).header("Authorization","Bearer "+apiKey).header("Content-Type","application/json").POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body))).build();}
         catch(Exception e){throw new AiAnalysisException("Failed to build LLM request.",e);}
         final HttpResponse<String> response;try{response=client.send(request,HttpResponse.BodyHandlers.ofString());}
         catch(HttpTimeoutException e){throw new AiAnalysisException("LLM request timed out.",e);}
