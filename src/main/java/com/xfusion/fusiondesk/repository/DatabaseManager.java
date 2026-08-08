@@ -49,6 +49,20 @@ public class DatabaseManager {
               FOREIGN KEY(ticket_id) REFERENCES tickets(id))
             """,
             "CREATE INDEX IF NOT EXISTS idx_audit_ticket_time ON audit_events(ticket_id, created_at)",
+            """
+            CREATE TABLE IF NOT EXISTS ai_suggestions (
+              id INTEGER PRIMARY KEY AUTOINCREMENT, ticket_id INTEGER NOT NULL,
+              suggested_category TEXT NOT NULL CHECK(suggested_category IN ('ACCOUNT_ACCESS','SOFTWARE_FAILURE','NETWORK','HARDWARE_OFFICE','BUSINESS_SYSTEM','OTHER')),
+              suggested_priority TEXT NOT NULL CHECK(suggested_priority IN ('P0','P1','P2','P3')),
+              summary TEXT NOT NULL, reason TEXT NOT NULL, raw_response TEXT NOT NULL,
+              model TEXT NOT NULL, prompt_version TEXT NOT NULL,
+              status TEXT NOT NULL CHECK(status IN ('PENDING','CONFIRMED','MODIFIED','REJECTED')),
+              final_category TEXT CHECK(final_category IS NULL OR final_category IN ('ACCOUNT_ACCESS','SOFTWARE_FAILURE','NETWORK','HARDWARE_OFFICE','BUSINESS_SYSTEM','OTHER')),
+              final_priority TEXT CHECK(final_priority IS NULL OR final_priority IN ('P0','P1','P2','P3')),
+              created_at TEXT NOT NULL, reviewed_at TEXT,
+              FOREIGN KEY(ticket_id) REFERENCES tickets(id))
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_ai_suggestions_ticket ON ai_suggestions(ticket_id, created_at)",
             "CREATE TABLE IF NOT EXISTS app_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
         };
         try (Connection connection = openConnection(); Statement statement = connection.createStatement()) {
