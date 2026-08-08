@@ -75,6 +75,7 @@ public class DatabaseManager {
             for (String sql : dialect.schemaStatements()) statement.execute(sql);
             ensurePromptTemplateColumn(connection);
             new PromptVersionRepository(this).ensureDefault(connection);
+            new LlmProviderStateRepository(this).ensureDefault(connection);
         } catch (SQLException e) {
             throw new DatabaseException("Failed to initialize database at " + safeLocation(), e);
         }
