@@ -73,9 +73,20 @@ public class DatabaseManager {
     public void initializeSchema() {
         try (Connection connection = openConnection(); Statement statement = connection.createStatement()) {
             for (String sql : dialect.schemaStatements()) statement.execute(sql);
+            ensurePromptTemplateColumn(connection);
             new PromptVersionRepository(this).ensureDefault(connection);
         } catch (SQLException e) {
             throw new DatabaseException("Failed to initialize database at " + safeLocation(), e);
+        }
+    }
+
+    private void ensurePromptTemplateColumn(Connection connection) throws SQLException {
+        try (Statement statement=connection.createStatement()) {
+            statement.executeQuery("SELECT user_prompt_template FROM prompt_versions WHERE 1=0").close();
+        } catch (SQLException missing) {
+            try (Statement statement=connection.createStatement()) {
+                statement.execute("ALTER TABLE prompt_versions ADD COLUMN user_prompt_template " + (type==DatabaseType.MYSQL?"LONGTEXT NULL":"TEXT"));
+            }
         }
     }
 
