@@ -64,6 +64,11 @@ public class TicketRepository {
             ps.setString(1,status.name());ps.setString(2,now.toString());ps.setLong(3,id);ps.setLong(4,version);return ps.executeUpdate();
         }
     }
+    public int updateClassificationWithVersion(Connection c,long id,TicketCategory category,TicketPriority priority,long version,Instant now)throws SQLException{
+        try(PreparedStatement ps=c.prepareStatement("UPDATE tickets SET category=?,priority=?,version=version+1,updated_at=? WHERE id=? AND version=?")){
+            ps.setString(1,category.name());ps.setString(2,priority.name());ps.setString(3,now.toString());ps.setLong(4,id);ps.setLong(5,version);return ps.executeUpdate();
+        }
+    }
     private Ticket map(ResultSet rs)throws SQLException{
         String category=rs.getString("category");
         return new Ticket(rs.getLong("id"),rs.getString("title"),rs.getString("description"),rs.getString("submitter"),

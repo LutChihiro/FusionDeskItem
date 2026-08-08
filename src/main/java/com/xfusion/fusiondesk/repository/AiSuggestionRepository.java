@@ -25,6 +25,13 @@ public class AiSuggestionRepository {
         try(Connection c=database.openConnection();PreparedStatement ps=c.prepareStatement("SELECT "+COLUMNS+" FROM ai_suggestions WHERE id=?")){ps.setLong(1,id);try(ResultSet rs=ps.executeQuery()){return rs.next()?Optional.of(map(rs)):Optional.empty();}}
         catch(SQLException e){throw new DatabaseException("Failed to query AI suggestion",e);}
     }
+    public Optional<AiSuggestion> findById(Connection c,long id)throws SQLException{
+        try(PreparedStatement ps=c.prepareStatement("SELECT "+COLUMNS+" FROM ai_suggestions WHERE id=?")){ps.setLong(1,id);try(ResultSet rs=ps.executeQuery()){return rs.next()?Optional.of(map(rs)):Optional.empty();}}
+    }
+    public int markReviewed(Connection c,long id,SuggestionStatus status,TicketCategory finalCategory,TicketPriority finalPriority,Instant reviewedAt)throws SQLException{
+        String sql="UPDATE ai_suggestions SET status=?,final_category=?,final_priority=?,reviewed_at=? WHERE id=? AND status='PENDING'";
+        try(PreparedStatement ps=c.prepareStatement(sql)){ps.setString(1,status.name());if(finalCategory==null)ps.setNull(2,Types.VARCHAR);else ps.setString(2,finalCategory.name());if(finalPriority==null)ps.setNull(3,Types.VARCHAR);else ps.setString(3,finalPriority.name());ps.setString(4,reviewedAt.toString());ps.setLong(5,id);return ps.executeUpdate();}
+    }
     public List<AiSuggestion> findByTicketId(long ticketId){
         try(Connection c=database.openConnection();PreparedStatement ps=c.prepareStatement("SELECT "+COLUMNS+" FROM ai_suggestions WHERE ticket_id=? ORDER BY created_at DESC,id DESC")){ps.setLong(1,ticketId);List<AiSuggestion> out=new ArrayList<>();try(ResultSet rs=ps.executeQuery()){while(rs.next())out.add(map(rs));}return out;}
         catch(SQLException e){throw new DatabaseException("Failed to list AI suggestions",e);}
