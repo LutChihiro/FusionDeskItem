@@ -1,0 +1,10 @@
+package com.xfusion.fusiondesk.evaluation;
+import com.xfusion.fusiondesk.ai.*;import java.time.Instant;import java.util.*;
+public class EvaluationRunner {
+    private final LlmProvider provider;private final AiResponseValidator validator;private final EvaluationPromptFactory prompts;
+    public EvaluationRunner(LlmProvider provider){this(provider,new AiResponseValidator(),new EvaluationPromptFactory());}
+    public EvaluationRunner(LlmProvider provider,AiResponseValidator validator,EvaluationPromptFactory prompts){this.provider=provider;this.validator=validator;this.prompts=prompts;}
+    public EvaluationReport run(String promptVersion,List<EvaluationCase> cases,String configuredModel){List<EvaluationResult> results=new ArrayList<>();String actualModel=configuredModel;for(EvaluationCase c:cases){try{var prompt=prompts.build(promptVersion,c);LlmResponse response=provider.complete(prompt.systemPrompt(),prompt.userPrompt());if(response!=null&&response.model()!=null&&!response.model().isBlank())actualModel=response.model();AiAnalysisResult predicted=validator.validate(response==null?null:response.content());boolean category=predicted.category()==c.expectedCategory(),priority=predicted.priority()==c.expectedPriority();results.add(new EvaluationResult(c.id(),c.expectedCategory(),predicted.category(),c.expectedPriority(),predicted.priority(),true,category,priority,c.adversarial(),c.adversarial()?category&&priority:null,predicted.summary(),predicted.reason(),null));}catch(Exception e){results.add(new EvaluationResult(c.id(),c.expectedCategory(),null,c.expectedPriority(),null,false,false,false,c.adversarial(),c.adversarial()?false:null,null,null,safeError(e)));}}
+        List<EvaluationResult> immutable=List.copyOf(results);return new EvaluationReport(promptVersion,actualModel,EvaluationCaseLoader.RESOURCE,Instant.now().toString(),EvaluationMetrics.calculate(immutable),immutable);}
+    private String safeError(Exception e){String message=e.getMessage();return message==null||message.isBlank()?"Evaluation case failed.":message;}
+}
