@@ -6,69 +6,71 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.*;
+import java.time.Instant;
+import java.util.Objects;
 
 public class DatabaseManager {
+    private final DatabaseType type;
+    private final DatabaseDialect dialect;
     private final Path dbPath;
+    private final String jdbcUrl;
+    private final String username;
+    private final String password;
 
-    public DatabaseManager(Path dbPath) { this.dbPath = dbPath.toAbsolutePath().normalize(); }
-    public static DatabaseManager defaultDatabase() { return new DatabaseManager(Path.of("data", "fusiondesk.db")); }
+    /** Explicit paths always select SQLite; this keeps temporary-file tests deterministic. */
+    public DatabaseManager(Path dbPath) {
+        this.type = DatabaseType.SQLITE;
+        this.dialect = new SqliteDialect();
+        this.dbPath = Objects.requireNonNull(dbPath).toAbsolutePath().normalize();
+        this.jdbcUrl = "jdbc:sqlite:" + this.dbPath;
+        this.username = null;
+        this.password = null;
+    }
+
+    private DatabaseManager(String jdbcUrl, String username, String password) {
+        this.type = DatabaseType.MYSQL;
+        this.dialect = new MySqlDialect();
+        this.dbPath = null;
+        this.jdbcUrl = requireConfiguration(jdbcUrl, "MYSQL_URL");
+        this.username = requireConfiguration(username, "MYSQL_USER");
+        this.password = requireConfiguration(password, "MYSQL_PASSWORD");
+    }
+
+    public static DatabaseManager defaultDatabase() {
+        DatabaseType configured = DatabaseType.parse(System.getenv("FUSIONDESK_DB_TYPE"));
+        if (configured == DatabaseType.MYSQL) {
+            return mysql(System.getenv("MYSQL_URL"), System.getenv("MYSQL_USER"), System.getenv("MYSQL_PASSWORD"));
+        }
+        return new DatabaseManager(Path.of("data", "fusiondesk.db"));
+    }
+
+    public static DatabaseManager mysql(String jdbcUrl, String username, String password) {
+        return new DatabaseManager(jdbcUrl, username, password);
+    }
+
+    public DatabaseType type() { return type; }
     public Path dbPath() { return dbPath; }
+    public String jdbcUrl() { return jdbcUrl; }
 
     public Connection openConnection() throws SQLException {
-        ensureParentDirectory();
-        Connection connection = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
-        try (Statement statement = connection.createStatement()) {
-            statement.execute("PRAGMA foreign_keys = ON");
-            statement.execute("PRAGMA busy_timeout = 5000");
-            statement.execute("PRAGMA journal_mode = WAL");
+        if (type == DatabaseType.SQLITE) ensureParentDirectory();
+        Connection connection;
+        try {
+            connection = type == DatabaseType.MYSQL
+                    ? DriverManager.getConnection(jdbcUrl, username, password)
+                    : DriverManager.getConnection(jdbcUrl);
+            dialect.configure(connection);
+            return connection;
+        } catch (SQLException e) {
+            throw new SQLException("Database connection failed for " + safeLocation(), e.getSQLState(), e.getErrorCode(), e);
         }
-        return connection;
     }
 
     public void initializeSchema() {
-        String[] statements = {
-            """
-            CREATE TABLE IF NOT EXISTS tickets (
-              id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, description TEXT NOT NULL,
-              submitter TEXT NOT NULL,
-              status TEXT NOT NULL CHECK(status IN ('NEW','IN_PROGRESS','RESOLVED','CLOSED')),
-              category TEXT CHECK(category IS NULL OR category IN ('ACCOUNT_ACCESS','SOFTWARE_FAILURE','NETWORK','HARDWARE_OFFICE','BUSINESS_SYSTEM','OTHER')),
-              priority TEXT NOT NULL CHECK(priority IN ('P0','P1','P2','P3')),
-              version INTEGER NOT NULL DEFAULT 0 CHECK(version >= 0), dedup_key TEXT NOT NULL,
-              created_at TEXT NOT NULL, updated_at TEXT NOT NULL)
-            """,
-            "CREATE UNIQUE INDEX IF NOT EXISTS uq_tickets_active_dedup ON tickets(dedup_key) WHERE status <> 'CLOSED'",
-            "CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status)",
-            "CREATE INDEX IF NOT EXISTS idx_tickets_category_priority ON tickets(category, priority)",
-            "CREATE INDEX IF NOT EXISTS idx_tickets_submitter ON tickets(submitter)",
-            "CREATE INDEX IF NOT EXISTS idx_tickets_created_at ON tickets(created_at)",
-            """
-            CREATE TABLE IF NOT EXISTS audit_events (
-              id INTEGER PRIMARY KEY AUTOINCREMENT, ticket_id INTEGER NOT NULL, event_type TEXT NOT NULL,
-              before_data TEXT, after_data TEXT, created_at TEXT NOT NULL,
-              FOREIGN KEY(ticket_id) REFERENCES tickets(id))
-            """,
-            "CREATE INDEX IF NOT EXISTS idx_audit_ticket_time ON audit_events(ticket_id, created_at)",
-            """
-            CREATE TABLE IF NOT EXISTS ai_suggestions (
-              id INTEGER PRIMARY KEY AUTOINCREMENT, ticket_id INTEGER NOT NULL,
-              suggested_category TEXT NOT NULL CHECK(suggested_category IN ('ACCOUNT_ACCESS','SOFTWARE_FAILURE','NETWORK','HARDWARE_OFFICE','BUSINESS_SYSTEM','OTHER')),
-              suggested_priority TEXT NOT NULL CHECK(suggested_priority IN ('P0','P1','P2','P3')),
-              summary TEXT NOT NULL, reason TEXT NOT NULL, raw_response TEXT NOT NULL,
-              model TEXT NOT NULL, prompt_version TEXT NOT NULL,
-              status TEXT NOT NULL CHECK(status IN ('PENDING','CONFIRMED','MODIFIED','REJECTED')),
-              final_category TEXT CHECK(final_category IS NULL OR final_category IN ('ACCOUNT_ACCESS','SOFTWARE_FAILURE','NETWORK','HARDWARE_OFFICE','BUSINESS_SYSTEM','OTHER')),
-              final_priority TEXT CHECK(final_priority IS NULL OR final_priority IN ('P0','P1','P2','P3')),
-              created_at TEXT NOT NULL, reviewed_at TEXT,
-              FOREIGN KEY(ticket_id) REFERENCES tickets(id))
-            """,
-            "CREATE INDEX IF NOT EXISTS idx_ai_suggestions_ticket ON ai_suggestions(ticket_id, created_at)",
-            "CREATE TABLE IF NOT EXISTS app_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
-        };
         try (Connection connection = openConnection(); Statement statement = connection.createStatement()) {
-            for (String sql : statements) statement.execute(sql);
+            for (String sql : dialect.schemaStatements()) statement.execute(sql);
         } catch (SQLException e) {
-            throw new DatabaseException("Failed to initialize database", e);
+            throw new DatabaseException("Failed to initialize database at " + safeLocation(), e);
         }
     }
 
@@ -85,21 +87,48 @@ public class DatabaseManager {
                 throw new DatabaseException("Database transaction failed", e);
             }
         } catch (SQLException e) {
-            throw new DatabaseException("Failed to open database", e);
+            throw new DatabaseException("Database connection failed for " + safeLocation(), e);
         }
     }
 
+    public void bindInstant(PreparedStatement statement, int index, Instant value) throws SQLException {
+        dialect.bindInstant(statement, index, value);
+    }
+
+    public Instant readInstant(ResultSet resultSet, String column) throws SQLException {
+        return dialect.readInstant(resultSet, column);
+    }
+
+    public boolean isDuplicateKey(Throwable error) { return dialect.isDuplicateKey(error); }
+
     public boolean metadataExists(String key) {
-        try (Connection c = openConnection(); PreparedStatement ps = c.prepareStatement("SELECT 1 FROM app_metadata WHERE key=?")) {
+        String keyColumn = dialect.metadataKeyColumn();
+        try (Connection c = openConnection(); PreparedStatement ps = c.prepareStatement(
+                "SELECT 1 FROM app_metadata WHERE " + keyColumn + "=?")) {
             ps.setString(1, key);
             try (ResultSet rs = ps.executeQuery()) { return rs.next(); }
         } catch (SQLException e) { throw new DatabaseException("Failed to read metadata", e); }
     }
 
     public void putMetadata(String key, String value) {
-        inTransaction(c -> { try (PreparedStatement ps = c.prepareStatement("INSERT OR REPLACE INTO app_metadata(key,value) VALUES(?,?)")) {
-            ps.setString(1, key); ps.setString(2, value); ps.executeUpdate(); return null;
-        }});
+        String sql = type == DatabaseType.MYSQL
+                ? "INSERT INTO app_metadata(meta_key,value) VALUES(?,?) ON DUPLICATE KEY UPDATE value=VALUES(value)"
+                : "INSERT OR REPLACE INTO app_metadata(key,value) VALUES(?,?)";
+        inTransaction(c -> {
+            try (PreparedStatement ps = c.prepareStatement(sql)) {
+                ps.setString(1, key); ps.setString(2, value); ps.executeUpdate(); return null;
+            }
+        });
+    }
+
+    private String safeLocation() {
+        if (type == DatabaseType.SQLITE) return dbPath.toString();
+        try {
+            java.net.URI uri = java.net.URI.create(jdbcUrl.substring("jdbc:".length()));
+            return "mysql://" + uri.getAuthority() + uri.getPath();
+        } catch (RuntimeException ignored) {
+            return "configured MySQL database";
+        }
     }
 
     private void ensureParentDirectory() {
@@ -107,6 +136,13 @@ public class DatabaseManager {
         if (parent == null) return;
         try { Files.createDirectories(parent); }
         catch (IOException e) { throw new DatabaseException("Failed to create database directory: " + parent, e); }
+    }
+
+    private static String requireConfiguration(String value, String name) {
+        if (value == null || value.isBlank()) {
+            throw new DatabaseException("MySQL configuration is missing: " + name + ".", null);
+        }
+        return value.strip();
     }
 
     @FunctionalInterface public interface SqlWork<T> { T execute(Connection connection) throws Exception; }

@@ -18,7 +18,7 @@ public class TicketRepository {
         try (PreparedStatement ps = c.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
             ps.setString(1,title); ps.setString(2,description); ps.setString(3,submitter);
             if (category == null) ps.setNull(4,Types.VARCHAR); else ps.setString(4,category.name());
-            ps.setString(5,priority.name()); ps.setString(6,dedupKey); ps.setString(7,now.toString()); ps.setString(8,now.toString());
+            ps.setString(5,priority.name()); ps.setString(6,dedupKey); database.bindInstant(ps,7,now); database.bindInstant(ps,8,now);
             ps.executeUpdate();
             try (ResultSet keys = ps.getGeneratedKeys()) {
                 if (!keys.next()) throw new SQLException("No generated ticket ID");
@@ -61,18 +61,18 @@ public class TicketRepository {
     }
     public int updateStatusWithVersion(Connection c,long id,TicketStatus status,long version,Instant now)throws SQLException{
         try(PreparedStatement ps=c.prepareStatement("UPDATE tickets SET status=?,version=version+1,updated_at=? WHERE id=? AND version=?")){
-            ps.setString(1,status.name());ps.setString(2,now.toString());ps.setLong(3,id);ps.setLong(4,version);return ps.executeUpdate();
+            ps.setString(1,status.name());database.bindInstant(ps,2,now);ps.setLong(3,id);ps.setLong(4,version);return ps.executeUpdate();
         }
     }
     public int updateClassificationWithVersion(Connection c,long id,TicketCategory category,TicketPriority priority,long version,Instant now)throws SQLException{
         try(PreparedStatement ps=c.prepareStatement("UPDATE tickets SET category=?,priority=?,version=version+1,updated_at=? WHERE id=? AND version=?")){
-            ps.setString(1,category.name());ps.setString(2,priority.name());ps.setString(3,now.toString());ps.setLong(4,id);ps.setLong(5,version);return ps.executeUpdate();
+            ps.setString(1,category.name());ps.setString(2,priority.name());database.bindInstant(ps,3,now);ps.setLong(4,id);ps.setLong(5,version);return ps.executeUpdate();
         }
     }
     private Ticket map(ResultSet rs)throws SQLException{
         String category=rs.getString("category");
         return new Ticket(rs.getLong("id"),rs.getString("title"),rs.getString("description"),rs.getString("submitter"),
             TicketStatus.valueOf(rs.getString("status")),category==null?null:TicketCategory.valueOf(category),TicketPriority.valueOf(rs.getString("priority")),
-            rs.getLong("version"),rs.getString("dedup_key"),Instant.parse(rs.getString("created_at")),Instant.parse(rs.getString("updated_at")));
+            rs.getLong("version"),rs.getString("dedup_key"),database.readInstant(rs,"created_at"),database.readInstant(rs,"updated_at"));
     }
 }

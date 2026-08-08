@@ -8,7 +8,6 @@ import com.xfusion.fusiondesk.model.*;
 import com.xfusion.fusiondesk.repository.*;
 import com.xfusion.fusiondesk.util.DedupKeyGenerator;
 
-import java.sql.SQLException;
 import java.time.Instant;
 import java.util.List;
 
@@ -36,7 +35,7 @@ public class TicketService {
                 audits.insert(c,ticket.id(),"CREATED",null,ticketJson(ticket),now); return new CreateTicketResult(ticket,false);
             });
         }catch(DatabaseException e){
-            if(isConstraintViolation(e)){var raced=tickets.findActiveByDedupKey(key);if(raced.isPresent())return new CreateTicketResult(raced.get(),true);}
+            if(database.isDuplicateKey(e)){var raced=tickets.findActiveByDedupKey(key);if(raced.isPresent())return new CreateTicketResult(raced.get(),true);}
             throw e;
         }
     }
@@ -62,7 +61,6 @@ public class TicketService {
         case RESOLVED -> to==TicketStatus.CLOSED||to==TicketStatus.IN_PROGRESS; case CLOSED -> false;};}
     private String validateText(String field,String value,int max){if(value==null||value.strip().isEmpty())throw new ValidationException(field+" must not be blank.");
         String stripped=value.strip();if(stripped.length()>max)throw new ValidationException(field+" must not exceed "+max+" characters.");return stripped;}
-    private boolean isConstraintViolation(Throwable error){for(Throwable t=error;t!=null;t=t.getCause())if(t instanceof SQLException sql&&sql.getErrorCode()==19)return true;return false;}
     private String ticketJson(Ticket t){ObjectNode n=json.createObjectNode();n.put("id",t.id());n.put("title",t.title());n.put("description",t.description());n.put("submitter",t.submitter());n.put("status",t.status().name());
         if(t.category()==null)n.putNull("category");else n.put("category",t.category().name());n.put("priority",t.priority().name());n.put("version",t.version());n.put("createdAt",t.createdAt().toString());return write(n);}
     private String statusJson(TicketStatus status,long version){ObjectNode n=json.createObjectNode();n.put("status",status.name());n.put("version",version);return write(n);}
