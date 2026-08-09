@@ -12,6 +12,9 @@ $OutputEncoding = $utf8
 
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $jarPath = Join-Path $projectRoot "target\fusiondesk.jar"
+$script:monitorProcess = $null
+$script:monitorOutputLog = $null
+$script:monitorErrorLog = $null
 Set-Location -LiteralPath $projectRoot
 
 function Show-Header {
@@ -249,6 +252,84 @@ function Run-PromptOptimization {
     }
 }
 
+function Start-BackgroundMonitor {
+    if ($null -ne $script:monitorProcess) {
+        $script:monitorProcess.Refresh()
+        if (-not $script:monitorProcess.HasExited) {
+            Write-Host "LLM Monitor 已在后台运行，PID: $($script:monitorProcess.Id)" -ForegroundColor Yellow
+            return
+        }
+    }
+
+    $logDirectory = Join-Path $projectRoot "logs"
+    [void](New-Item -ItemType Directory -Path $logDirectory -Force)
+    $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    $script:monitorOutputLog = Join-Path $logDirectory "llm-monitor-$timestamp.out.log"
+    $script:monitorErrorLog = Join-Path $logDirectory "llm-monitor-$timestamp.err.log"
+    $javaPath = (Get-Command java -ErrorAction Stop).Source
+    $arguments = @("-Dfile.encoding=UTF-8", "-Dsun.stdout.encoding=UTF-8",
+        "-Dsun.stderr.encoding=UTF-8", "-Dpicocli.ansi=false", "-jar", "target\fusiondesk.jar", "llm-monitor")
+
+    $script:monitorProcess = Start-Process -FilePath $javaPath -ArgumentList $arguments `
+        -WorkingDirectory $projectRoot -RedirectStandardOutput $script:monitorOutputLog `
+        -RedirectStandardError $script:monitorErrorLog -WindowStyle Hidden -PassThru
+
+    Start-Sleep -Milliseconds 500
+    $script:monitorProcess.Refresh()
+    if ($script:monitorProcess.HasExited) {
+        Write-Host "LLM Monitor 启动失败，Exit Code: $($script:monitorProcess.ExitCode)" -ForegroundColor Red
+        Show-BackgroundMonitor
+        return
+    }
+    Write-Host "LLM Monitor 已在后台启动，主菜单不会被阻塞。" -ForegroundColor Green
+    Write-Host "PID: $($script:monitorProcess.Id)"
+    Write-Host "标准输出: $script:monitorOutputLog"
+    Write-Host "错误输出: $script:monitorErrorLog"
+}
+
+function Show-BackgroundMonitor {
+    if ($null -eq $script:monitorProcess) {
+        Write-Host "本次终端会话尚未启动后台 Monitor。" -ForegroundColor Yellow
+    } else {
+        $script:monitorProcess.Refresh()
+        $status = if ($script:monitorProcess.HasExited) { "已退出" } else { "运行中" }
+        Write-Host "后台 Monitor: $status，PID: $($script:monitorProcess.Id)" -ForegroundColor Cyan
+        if ($script:monitorOutputLog -and (Test-Path -LiteralPath $script:monitorOutputLog)) {
+            Write-Host "`n最近标准输出：" -ForegroundColor Gray
+            Get-Content -LiteralPath $script:monitorOutputLog -Encoding UTF8 -Tail 20
+        }
+        if ($script:monitorErrorLog -and (Test-Path -LiteralPath $script:monitorErrorLog)) {
+            $recentErrors = Get-Content -LiteralPath $script:monitorErrorLog -Encoding UTF8 -Tail 20
+            if ($recentErrors) {
+                Write-Host "`n最近错误输出：" -ForegroundColor Yellow
+                $recentErrors | ForEach-Object { Write-Host $_ -ForegroundColor Yellow }
+            }
+        }
+    }
+    Write-Host "`n数据库中的当前状态和最近事件：" -ForegroundColor Cyan
+    Invoke-FusionDesk @("llm-status")
+}
+
+function Stop-BackgroundMonitor {
+    if ($null -eq $script:monitorProcess) {
+        Write-Host "本次终端会话没有可停止的后台 Monitor。" -ForegroundColor Yellow
+        return
+    }
+    $script:monitorProcess.Refresh()
+    if ($script:monitorProcess.HasExited) {
+        Write-Host "后台 Monitor 已经退出。" -ForegroundColor Yellow
+        return
+    }
+    Stop-Process -Id $script:monitorProcess.Id -Force
+    [void]$script:monitorProcess.WaitForExit(5000)
+    $script:monitorProcess.Refresh()
+    if ($script:monitorProcess.HasExited) {
+        Write-Host "后台 Monitor 已停止，PID: $($script:monitorProcess.Id)" -ForegroundColor Green
+    } else {
+        Write-Host "后台 Monitor 未能在5秒内停止，请检查 PID: $($script:monitorProcess.Id)" -ForegroundColor Red
+    }
+}
+
 Ensure-Jar
 
 while ($true) {
@@ -270,10 +351,12 @@ while ($true) {
     Write-Host " 12  运行真实 AI Evaluation"
     Write-Host " 13  初始化 Prompt 人工反馈演示样本"
     Write-Host " 14  手动触发 Prompt 优化"
-    Write-Host " 15  启动长期 llm-monitor（Ctrl+C 停止）"
+    Write-Host " 15  后台启动 llm-monitor（不阻塞菜单）"
+    Write-Host " 16  查看后台 Monitor 输出和数据库状态"
+    Write-Host " 17  停止后台 llm-monitor"
     Write-Host
     Write-Host "工程验收"
-    Write-Host " 16  一键运行默认自动化测试"
+    Write-Host " 18  一键运行默认自动化测试"
     Write-Host "  H  显示 CLI 原生帮助"
     Write-Host "  B  返回/取消当前输入（在各操作输入阶段使用）"
     Write-Host "  Q  退出"
@@ -297,8 +380,10 @@ while ($true) {
             "12" { Run-EvaluationInteractive }
             "13" { Invoke-FusionDesk @("prompt-feedback-seed") }
             "14" { Run-PromptOptimization }
-            "15" { Invoke-FusionDesk @("llm-monitor") }
-            "16" { Run-Tests }
+            "15" { Start-BackgroundMonitor }
+            "16" { Show-BackgroundMonitor }
+            "17" { Stop-BackgroundMonitor }
+            "18" { Run-Tests }
             "H"  { Invoke-FusionDesk @("--help") }
             "B"  { $returned = $true }
             "Q"  { break }
@@ -312,4 +397,12 @@ while ($true) {
     if (-not $returned) { Pause-Menu }
 }
 
+if ($null -ne $script:monitorProcess) {
+    $script:monitorProcess.Refresh()
+    if (-not $script:monitorProcess.HasExited) {
+        Write-Host "终端已退出；后台 Monitor 仍在运行，PID: $($script:monitorProcess.Id)。" -ForegroundColor Cyan
+        Write-Host "停止命令：Stop-Process -Id $($script:monitorProcess.Id)" -ForegroundColor Yellow
+        exit 0
+    }
+}
 Write-Host "FusionDesk 交互式终端已退出。" -ForegroundColor Cyan
