@@ -204,56 +204,6 @@ function Run-FailureDemo {
     Invoke-FusionDesk @("show", "$ticketId")
 }
 
-function Run-RealFailoverAndRecoveryDemo {
-    $ticketId = Read-Long "用于主备降级演示的 Ticket ID"
-    $failureThreshold = 2
-    $configPath = Join-Path $projectRoot "config\fusiondesk.properties"
-    if (Test-Path -LiteralPath $configPath) {
-        $thresholdLine = Get-Content -LiteralPath $configPath -Encoding UTF8 |
-            Where-Object { $_ -match '^\s*llm\.failover\.failure-threshold\s*=' } |
-            Select-Object -First 1
-        if ($thresholdLine) {
-            $configuredThreshold = 0
-            if ([int]::TryParse(($thresholdLine -split '=', 2)[1].Trim(), [ref]$configuredThreshold) -and $configuredThreshold -gt 0) {
-                $failureThreshold = $configuredThreshold
-            }
-        }
-    }
-
-    Write-Host "真实降级演示流程：" -ForegroundColor Cyan
-    Write-Host "1. 仅临时破坏主模型 Key，保留备用模型配置。"
-    Write-Host "2. 连续调用 $failureThreshold 次，使主模型达到熔断阈值。"
-    Write-Host "3. 每次由备用模型接管并正常生成 Suggestion。"
-    Write-Host "4. 恢复主模型 Key，由 Monitor 等待重试窗口并探测。"
-    Write-Host "5. 探测成功后 Circuit 回到 CLOSED，并重新使用主模型。"
-    $confirm = (Read-Host "确认执行真实主备模型调用？输入 YES").Trim().ToUpperInvariant()
-    if ($confirm -ne "YES") { Write-Host "已取消。" -ForegroundColor Gray; return }
-
-    $oldPrimaryKey = $env:LLM_API_KEY
-    $env:LLM_API_KEY = "intentionally-invalid-primary-demo-key"
-    try {
-        for ($attempt = 1; $attempt -le $failureThreshold; $attempt++) {
-            Write-Host "`n降级触发调用 $attempt / $failureThreshold" -ForegroundColor Yellow
-            Invoke-FusionDesk @("analyze", "$ticketId")
-        }
-    } finally {
-        if ($null -eq $oldPrimaryKey) { Remove-Item Env:LLM_API_KEY -ErrorAction SilentlyContinue }
-        else { $env:LLM_API_KEY = $oldPrimaryKey }
-    }
-
-    Write-Host "`n主模型配置已恢复。当前持久化熔断状态与事件：" -ForegroundColor Cyan
-    Invoke-FusionDesk @("llm-status")
-
-    Write-Host "`nMonitor 将等待 nextRetryAt 到期，然后只执行一次真实主模型探测。" -ForegroundColor Cyan
-    Invoke-FusionDesk @("llm-monitor", "--once", "--wait")
-
-    Write-Host "`n恢复后的状态与事件：" -ForegroundColor Cyan
-    Invoke-FusionDesk @("llm-status")
-
-    Write-Host "`n再次 Analyze，验证系统已经切回主模型：" -ForegroundColor Cyan
-    Invoke-FusionDesk @("analyze", "$ticketId")
-}
-
 function Run-EvaluationInteractive {
     $prompt = Read-Required "Prompt Version（baseline-v0/v1/v2/v3）"
     Write-Host "Evaluation 会对固定数据集调用真实模型，可能产生多次 API 请求。" -ForegroundColor Yellow
@@ -316,16 +266,14 @@ while ($true) {
     Write-Host "  8  真实 AI Analyze"
     Write-Host "  9  人工 Review（confirm/modify/reject）"
     Write-Host " 10  任务书 Prompt Injection 一键演示"
-    Write-Host " 11  主备模型全部失败与核心功能隔离"
-    Write-Host " 12  真实主模型降级、备用接管与 Monitor 恢复"
-    Write-Host " 13  查看模型降级状态和最近事件"
-    Write-Host " 14  运行真实 AI Evaluation"
-    Write-Host " 15  初始化 Prompt 人工反馈演示样本"
-    Write-Host " 16  手动触发 Prompt 优化"
-    Write-Host " 17  启动长期 llm-monitor（Ctrl+C 停止）"
+    Write-Host " 11  错误 API Key 与核心功能隔离演示"
+    Write-Host " 12  运行真实 AI Evaluation"
+    Write-Host " 13  初始化 Prompt 人工反馈演示样本"
+    Write-Host " 14  手动触发 Prompt 优化"
+    Write-Host " 15  启动长期 llm-monitor（Ctrl+C 停止）"
     Write-Host
     Write-Host "工程验收"
-    Write-Host " 18  一键运行默认自动化测试"
+    Write-Host " 16  一键运行默认自动化测试"
     Write-Host "  H  显示 CLI 原生帮助"
     Write-Host "  B  返回/取消当前输入（在各操作输入阶段使用）"
     Write-Host "  Q  退出"
@@ -346,13 +294,11 @@ while ($true) {
             "9"  { Review-SuggestionInteractive }
             "10" { Run-InjectionDemo }
             "11" { Run-FailureDemo }
-            "12" { Run-RealFailoverAndRecoveryDemo }
-            "13" { Invoke-FusionDesk @("llm-status") }
-            "14" { Run-EvaluationInteractive }
-            "15" { Invoke-FusionDesk @("prompt-feedback-seed") }
-            "16" { Run-PromptOptimization }
-            "17" { Invoke-FusionDesk @("llm-monitor") }
-            "18" { Run-Tests }
+            "12" { Run-EvaluationInteractive }
+            "13" { Invoke-FusionDesk @("prompt-feedback-seed") }
+            "14" { Run-PromptOptimization }
+            "15" { Invoke-FusionDesk @("llm-monitor") }
+            "16" { Run-Tests }
             "H"  { Invoke-FusionDesk @("--help") }
             "B"  { $returned = $true }
             "Q"  { break }

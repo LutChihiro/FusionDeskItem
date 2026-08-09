@@ -12,7 +12,7 @@ import picocli.CommandLine.Command;
 
 @Command(name="fusiondesk",mixinStandardHelpOptions=true,version="FusionDesk 1.0",
     description="Local collaborative ticket management.",
-    subcommands={InitCommand.class,SeedCommand.class,CreateCommand.class,ListCommand.class,ShowCommand.class,TransitionCommand.class,AuditCommand.class,AnalyzeCommand.class,ReviewCommand.class,EvaluateCommand.class,PromptFeedbackSeedCommand.class,PromptOptimizeCommand.class,LlmStatusCommand.class,LlmMonitorCommand.class})
+    subcommands={InitCommand.class,SeedCommand.class,CreateCommand.class,ListCommand.class,ShowCommand.class,TransitionCommand.class,AuditCommand.class,AnalyzeCommand.class,ReviewCommand.class,EvaluateCommand.class,PromptFeedbackSeedCommand.class,PromptOptimizeCommand.class,LlmMonitorCommand.class})
 public class FusionDeskCommand implements Runnable {
     private final DatabaseManager database; private final TicketService service; private final AiSuggestionRepository suggestions;
     public FusionDeskCommand(DatabaseManager database){this.database=database;this.service=new TicketService(database);this.suggestions=new AiSuggestionRepository(database);}
