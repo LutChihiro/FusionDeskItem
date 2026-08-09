@@ -1,8 +1,14 @@
 ﻿param()
 
 $ErrorActionPreference = "Stop"
-[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
-$OutputEncoding = [System.Text.UTF8Encoding]::new()
+$utf8 = [System.Text.UTF8Encoding]::new($false)
+[Console]::InputEncoding = $utf8
+[Console]::OutputEncoding = $utf8
+$OutputEncoding = $utf8
+
+# Windows PowerShell 5.1 的原生进程默认可能使用系统 ANSI/OEM 代码页。
+# 切换到 UTF-8，确保中文参数传给 Java、Java 输出回终端时使用同一编码。
+& "$env:SystemRoot\System32\chcp.com" 65001 | Out-Null
 
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $jarPath = Join-Path $projectRoot "target\fusiondesk.jar"
@@ -31,7 +37,7 @@ function Invoke-FusionDesk {
     param([string[]]$Arguments)
     Write-Host
     Write-Host ("fusiondesk " + ($Arguments -join " ")) -ForegroundColor DarkGray
-    & java -jar $jarPath @Arguments
+    & java "-Dfile.encoding=UTF-8" "-Dsun.stdout.encoding=UTF-8" "-Dsun.stderr.encoding=UTF-8" "-Dpicocli.ansi=false" -jar $jarPath @Arguments
     $code = $LASTEXITCODE
     Write-Host
     if ($code -eq 0) {
@@ -45,7 +51,7 @@ function Invoke-FusionDeskCapture {
     param([string[]]$Arguments)
     Write-Host
     Write-Host ("fusiondesk " + ($Arguments -join " ")) -ForegroundColor DarkGray
-    $output = & java -jar $jarPath @Arguments 2>&1
+    $output = & java "-Dfile.encoding=UTF-8" "-Dsun.stdout.encoding=UTF-8" "-Dsun.stderr.encoding=UTF-8" "-Dpicocli.ansi=false" -jar $jarPath @Arguments 2>&1
     $code = $LASTEXITCODE
     $output | ForEach-Object { Write-Host $_ }
     return [pscustomobject]@{ ExitCode = $code; Output = ($output -join "`n") }
@@ -54,7 +60,8 @@ function Invoke-FusionDeskCapture {
 function Read-Required {
     param([string]$Prompt)
     while ($true) {
-        $value = Read-Host $Prompt
+        $value = Read-Host "$Prompt（输入 B 返回主菜单）"
+        if (Test-BackCommand $value) { throw [System.OperationCanceledException]::new("用户返回主菜单") }
         if (-not [string]::IsNullOrWhiteSpace($value)) { return $value }
         Write-Host "该项不能为空，请重新输入。" -ForegroundColor Yellow
     }
@@ -62,13 +69,16 @@ function Read-Required {
 
 function Read-Optional {
     param([string]$Prompt)
-    return (Read-Host "$Prompt（直接按 Enter 表示不筛选）").Trim()
+    $value = (Read-Host "$Prompt（Enter 跳过，B 返回主菜单）").Trim()
+    if (Test-BackCommand $value) { throw [System.OperationCanceledException]::new("用户返回主菜单") }
+    return $value
 }
 
 function Read-Long {
     param([string]$Prompt)
     while ($true) {
-        $raw = Read-Host $Prompt
+        $raw = Read-Host "$Prompt（输入 B 返回主菜单）"
+        if (Test-BackCommand $raw) { throw [System.OperationCanceledException]::new("用户返回主菜单") }
         $number = 0L
         if ([long]::TryParse($raw, [ref]$number) -and $number -ge 0) { return $number }
         Write-Host "请输入不小于 0 的整数。" -ForegroundColor Yellow
@@ -77,6 +87,13 @@ function Read-Long {
 
 function Pause-Menu {
     [void](Read-Host "按 Enter 返回主菜单")
+}
+
+function Test-BackCommand {
+    param([AllowNull()][string]$Value)
+    if ($null -eq $Value) { return $false }
+    $normalized = $Value.Trim().ToUpperInvariant()
+    return $normalized -eq "B" -or $normalized -eq "BACK" -or $normalized -eq "返回"
 }
 
 function Create-TicketInteractive {
@@ -203,6 +220,35 @@ function Run-Tests {
     else { Write-Host "测试失败，请保留真实输出。" -ForegroundColor Red }
 }
 
+function Run-PromptOptimization {
+    $configPath = Join-Path $projectRoot "config\fusiondesk.properties"
+    $positive = "20"
+    $negative = "10"
+    $modified = "5"
+    if (Test-Path -LiteralPath $configPath) {
+        $properties = @{}
+        Get-Content -LiteralPath $configPath -Encoding UTF8 | ForEach-Object {
+            if ($_ -match '^\s*([^#][^=]*)=(.*)$') {
+                $properties[$matches[1].Trim()] = $matches[2].Trim()
+            }
+        }
+        if ($properties["prompt.optimization.min-positive-samples"]) { $positive = $properties["prompt.optimization.min-positive-samples"] }
+        if ($properties["prompt.optimization.min-negative-samples"]) { $negative = $properties["prompt.optimization.min-negative-samples"] }
+        if ($properties["prompt.optimization.min-modified-samples"]) { $modified = $properties["prompt.optimization.min-modified-samples"] }
+    }
+
+    Write-Host "Prompt 优化是手动触发的安全操作。" -ForegroundColor Cyan
+    Write-Host "当前配置要求：正样本 >= $positive，负样本 >= $negative，其中 MODIFIED >= $modified。" -ForegroundColor Yellow
+    Write-Host "样本不足时命令会明确拒绝，不会生成或晋升 Prompt。" -ForegroundColor Yellow
+    Write-Host "达到阈值后会调用真实模型生成候选 Prompt，并对新旧版本各运行完整固定评测集。" -ForegroundColor Yellow
+    $confirm = (Read-Host "确认执行？输入 YES").Trim().ToUpperInvariant()
+    if ($confirm -eq "YES") {
+        Invoke-FusionDesk @("prompt-optimize")
+    } else {
+        Write-Host "已取消 Prompt 优化。" -ForegroundColor Gray
+    }
+}
+
 Ensure-Jar
 
 while ($true) {
@@ -222,38 +268,48 @@ while ($true) {
     Write-Host " 10  任务书 Prompt Injection 一键演示"
     Write-Host " 11  错误 API Key 与核心功能隔离演示"
     Write-Host " 12  运行真实 AI Evaluation"
-    Write-Host " 13  手动触发 Prompt 优化"
-    Write-Host " 14  启动长期 llm-monitor（Ctrl+C 停止）"
+    Write-Host " 13  初始化 Prompt 人工反馈演示样本"
+    Write-Host " 14  手动触发 Prompt 优化"
+    Write-Host " 15  启动长期 llm-monitor（Ctrl+C 停止）"
     Write-Host
     Write-Host "工程验收"
-    Write-Host " 15  一键运行默认自动化测试"
+    Write-Host " 16  一键运行默认自动化测试"
     Write-Host "  H  显示 CLI 原生帮助"
+    Write-Host "  B  返回/取消当前输入（在各操作输入阶段使用）"
     Write-Host "  Q  退出"
     Write-Host
 
     $choice = (Read-Host "请选择功能").Trim().ToUpperInvariant()
-    switch ($choice) {
-        "1"  { Invoke-FusionDesk @("init") }
-        "2"  { Invoke-FusionDesk @("seed") }
-        "3"  { Create-TicketInteractive }
-        "4"  { List-TicketsInteractive }
-        "5"  { Show-TicketInteractive }
-        "6"  { Transition-TicketInteractive }
-        "7"  { Audit-TicketInteractive }
-        "8"  { Analyze-TicketInteractive }
-        "9"  { Review-SuggestionInteractive }
-        "10" { Run-InjectionDemo }
-        "11" { Run-FailureDemo }
-        "12" { Run-EvaluationInteractive }
-        "13" { Invoke-FusionDesk @("prompt-optimize") }
-        "14" { Invoke-FusionDesk @("llm-monitor") }
-        "15" { Run-Tests }
-        "H"  { Invoke-FusionDesk @("--help") }
-        "Q"  { break }
-        default { Write-Host "无效选项。" -ForegroundColor Yellow }
+    $returned = $false
+    try {
+        switch ($choice) {
+            "1"  { Invoke-FusionDesk @("init") }
+            "2"  { Invoke-FusionDesk @("seed") }
+            "3"  { Create-TicketInteractive }
+            "4"  { List-TicketsInteractive }
+            "5"  { Show-TicketInteractive }
+            "6"  { Transition-TicketInteractive }
+            "7"  { Audit-TicketInteractive }
+            "8"  { Analyze-TicketInteractive }
+            "9"  { Review-SuggestionInteractive }
+            "10" { Run-InjectionDemo }
+            "11" { Run-FailureDemo }
+            "12" { Run-EvaluationInteractive }
+            "13" { Invoke-FusionDesk @("prompt-feedback-seed") }
+            "14" { Run-PromptOptimization }
+            "15" { Invoke-FusionDesk @("llm-monitor") }
+            "16" { Run-Tests }
+            "H"  { Invoke-FusionDesk @("--help") }
+            "B"  { $returned = $true }
+            "Q"  { break }
+            default { Write-Host "无效选项。" -ForegroundColor Yellow }
+        }
+    } catch [System.OperationCanceledException] {
+        Write-Host "已取消当前操作，返回主菜单；未执行任何业务命令。" -ForegroundColor Yellow
+        $returned = $true
     }
     if ($choice -eq "Q") { break }
-    Pause-Menu
+    if (-not $returned) { Pause-Menu }
 }
 
 Write-Host "FusionDesk 交互式终端已退出。" -ForegroundColor Cyan
