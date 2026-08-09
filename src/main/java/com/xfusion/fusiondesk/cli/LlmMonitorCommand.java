@@ -9,6 +9,7 @@ import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 import picocli.CommandLine.ParentCommand;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
@@ -24,6 +25,9 @@ public class LlmMonitorCommand implements Callable<Integer> {
     @Option(names = "--once", description = "仅执行一次到期探测后退出。")
     boolean once;
 
+    @Option(names = "--wait", description = "与 --once 配合，等待 nextRetryAt 到期后再探测。")
+    boolean wait;
+
     @Override
     public Integer call() throws Exception {
         AppConfig config = AppConfig.current();
@@ -31,12 +35,16 @@ public class LlmMonitorCommand implements Callable<Integer> {
         if (providers.fallback() == null) {
             throw new ValidationException("llm-monitor requires llm.fallback.enabled=true.");
         }
+        if (wait && !once) {
+            throw new ValidationException("--wait must be used together with --once.");
+        }
 
         LlmFailoverPolicy policy = LlmFailoverPolicy.fromConfig(config);
         LlmMonitorService monitor = new LlmMonitorService(
                 root.database(), providers.primary(), providers.primaryModel(), policy);
 
         if (once) {
+            waitUntilDue(monitor);
             print(monitor.probeIfDue());
             return 0;
         }
@@ -81,12 +89,21 @@ public class LlmMonitorCommand implements Callable<Integer> {
         return 0;
     }
 
+    private void waitUntilDue(LlmMonitorService monitor) throws InterruptedException {
+        if (!wait) {
+            return;
+        }
+        Instant nextRetry = monitor.currentState().nextRetryAt();
+        if (nextRetry != null && nextRetry.isAfter(Instant.now())) {
+            long waitMillis = Math.max(1, Duration.between(Instant.now(), nextRetry).toMillis());
+            System.out.printf("等待主模型探测窗口：约 %.1f 秒。%n", waitMillis / 1000.0);
+            Thread.sleep(waitMillis);
+        }
+    }
+
     private void print(LlmMonitorService.ProbeResult result) {
         System.out.printf("%s | state=%s | failures=%d | nextRetry=%s | %s%n",
-                Instant.now(),
-                result.state().state(),
-                result.state().consecutiveFailures(),
-                result.state().nextRetryAt() == null ? "-" : result.state().nextRetryAt(),
-                result.message());
+                Instant.now(), result.state().state(), result.state().consecutiveFailures(),
+                result.state().nextRetryAt() == null ? "-" : result.state().nextRetryAt(), result.message());
     }
 }

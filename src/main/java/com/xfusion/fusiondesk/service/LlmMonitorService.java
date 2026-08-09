@@ -55,9 +55,12 @@ public class LlmMonitorService {
         } catch (RuntimeException error) {
             states.recordFailure(primaryModel, safeMessage(error), Instant.now(), policy,
                     LlmProviderStateRepository.SOURCE_MONITOR);
-            return new ProbeResult(true, false, states.get(),
-                    "主模型探测失败：" + safeMessage(error));
+            return new ProbeResult(true, false, states.get(), "主模型探测失败：" + safeMessage(error));
         }
+    }
+
+    public LlmProviderState currentState() {
+        return states.get();
     }
 
     private String healthSystem() {
@@ -80,6 +83,5 @@ public class LlmMonitorService {
     }
 
     public record ProbeResult(boolean attempted, boolean recovered,
-                              LlmProviderState state, String message) {
-    }
+                              LlmProviderState state, String message) { }
 }
